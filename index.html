@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Birthday Paradox Simulator</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .dot {
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    margin: 2px;
+    transition: background-color 0.3s;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:scale(0)} to{opacity:1;transform:scale(1)} }
+  .dot-appear { animation: fadeIn 0.2s ease forwards; }
+  canvas { display: block; }
+</style>
+</head>
+<body class="bg-gray-900 text-white min-h-screen p-4">
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-3xl font-bold text-center mb-1 text-yellow-400">Birthday Paradox</h1>
+  <p class="text-center text-gray-400 text-sm mb-4">Interactive Probability Simulator</p>
+
+  <!-- Slider control -->
+  <div class="bg-gray-800 rounded-xl p-4 mb-4">
+    <div class="flex items-center gap-4 mb-2">
+      <label for="groupSlider" class="text-sm text-gray-300 whitespace-nowrap">Group size:</label>
+      <input type="range" id="groupSlider" min="2" max="80" value="23" aria-label="Group size slider"
+        class="flex-1 accent-yellow-400 cursor-pointer" oninput="updateFromSlider()">
+      <span class="text-2xl font-black text-yellow-400 w-10 text-right" id="sliderVal">23</span>
+    </div>
+    <!-- Probability display -->
+    <div class="flex gap-4 justify-center text-center">
+      <div>
+        <div class="text-3xl font-black text-green-400" id="exactProb">50.7%</div>
+        <div class="text-xs text-gray-400">Exact probability</div>
+      </div>
+      <div id="monteCarloDiv" class="hidden">
+        <div class="text-3xl font-black text-blue-400" id="mcProb">—</div>
+        <div class="text-xs text-gray-400">Monte Carlo (10k runs)</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <div class="flex flex-wrap gap-2 justify-center mb-4">
+    <button onclick="runMonteCarlo()" aria-label="Run Monte Carlo simulation"
+      class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-5 py-2 rounded-lg text-sm transition">
+      Monte Carlo (10,000 runs)
+    </button>
+    <button onclick="startStepThrough()" aria-label="Step through adding people"
+      id="stepBtn" class="bg-purple-600 hover:bg-purple-500 text-white font-bold px-5 py-2 rounded-lg text-sm transition">
+      Step Through
+    </button>
+    <button onclick="addOnePerson()" aria-label="Add one person" id="addOneBtn"
+      class="hidden bg-teal-600 hover:bg-teal-500 text-white font-bold px-5 py-2 rounded-lg text-sm transition">
+      + Add Person
+    </button>
+    <button onclick="resetStepThrough()" id="resetStepBtn"
+      class="hidden bg-gray-600 hover:bg-gray-500 text-white font-bold px-5 py-2 rounded-lg text-sm transition">
+      Reset
+    </button>
+  </div>
+
+  <!-- Dot visualization -->
+  <div class="bg-gray-800 rounded-xl p-3 mb-4">
+    <div class="text-xs text-gray-400 mb-2">People in group (colored dots share a birthday)</div>
+    <div id="dotArea" class="flex flex-wrap min-h-10" aria-label="Visual representation of group"></div>
+    <div class="text-xs text-gray-400 mt-1" id="dotLabel"></div>
+  </div>
+
+  <!-- Charts row -->
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+    <!-- Probability curve -->
+    <div class="bg-gray-800 rounded-xl p-3">
+      <div class="text-sm font-semibold text-gray-300 mb-1">Probability Curve (n=2 to 80)</div>
+      <canvas id="curveChart" height="180" aria-label="Probability curve chart"></canvas>
+    </div>
+    <!-- Fun facts -->
+    <div class="bg-gray-800 rounded-xl p-3">
+      <div class="text-sm font-semibold text-yellow-300 mb-2">Fun Facts</div>
+      <div class="text-sm text-gray-300 space-y-2">
+        <p><span class="text-yellow-400 font-bold">50%</span> chance with just <span class="text-white font-bold">23 people</span>. Most people guess 183!</p>
+        <p><span class="text-yellow-400 font-bold">99%</span> chance with only <span class="text-white font-bold">57 people</span>.</p>
+        <p>With <span class="text-yellow-400 font-bold">70 people</span>, probability exceeds <span class="text-white font-bold">99.9%</span>.</p>
+        <p>Real-world: In a room of 30 people, there's a <span class="text-white font-bold">~70%</span> chance two share a birthday.</p>
+        <p>Paradox: We compare all <em>pairs</em> (n×(n-1)/2 pairs), not one person to all others.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// --- Exact probability ---
+function exactProb(n) {
+  if (n <= 1) return 0;
+  let p = 1;
+  for (let i = 1; i < n; i++) p *= (365 - i) / 365;
+  return 1 - p;
+}
+
+// Precompute curve
+const CURVE = [];
+for (let n = 2; n <= 80; n++) CURVE.push({ n, p: exactProb(n) });
+
+let stepMode = false;
+let stepPeople = [];
+
+function updateFromSlider() {
+  const n = parseInt(document.getElementById('groupSlider').value);
+  document.getElementById('sliderVal').textContent = n;
+  const p = exactProb(n);
+  document.getElementById('exactProb').textContent = (p * 100).toFixed(1) + '%';
+  drawCurveChart(n);
+  if (!stepMode) generateDots(n);
+}
+
+// --- Dot visualization ---
+const BIRTHDAY_COLORS = [
+  '#ef4444','#f97316','#eab308','#22c55e','#06b6d4','#3b82f6','#8b5cf6','#ec4899',
+  '#14b8a6','#f59e0b','#10b981','#6366f1','#e11d48','#0ea5e9','#84cc16','#d946ef'
+];
+
+function generateDots(n, animate = false) {
+  const dotArea = document.getElementById('dotArea');
+  dotArea.innerHTML = '';
+  const birthdays = Array.from({length: n}, () => Math.floor(Math.random()*365));
+  const bdMap = {};
+  birthdays.forEach((b, i) => {
+    if (!bdMap[b]) bdMap[b] = [];
+    bdMap[b].push(i);
+  });
+  const sharedGroups = Object.values(bdMap).filter(g => g.length > 1);
+  const sharedIdx = new Set(sharedGroups.flat());
+  const groupColors = {};
+  sharedGroups.forEach((g, gi) => g.forEach(idx => groupColors[idx] = BIRTHDAY_COLORS[gi % BIRTHDAY_COLORS.length]));
+
+  const hasMatch = sharedIdx.size > 0;
+  for (let i = 0; i < n; i++) {
+    const dot = document.createElement('span');
+    dot.className = 'dot' + (animate ? ' dot-appear' : '');
+    if (animate) dot.style.animationDelay = (i*30)+'ms';
+    dot.style.backgroundColor = groupColors[i] || '#4b5563';
+    dot.title = `Person ${i+1}: day ${birthdays[i]+1}`;
+    dot.setAttribute('aria-label', `Person ${i+1}`);
+    dotArea.appendChild(dot);
+  }
+  const lbl = document.getElementById('dotLabel');
+  if (hasMatch) {
+    const pairs = sharedGroups.map(g => `${g.length} people`).join(', ');
+    lbl.textContent = `Match found! Shared birthday groups: ${pairs} (colored)`;
+    lbl.className = 'text-xs text-green-400 mt-1';
+  } else {
+    lbl.textContent = 'No shared birthdays in this simulation.';
+    lbl.className = 'text-xs text-gray-400 mt-1';
+  }
+}
+
+// --- Step through ---
+function startStepThrough() {
+  stepMode = true;
+  stepPeople = [];
+  document.getElementById('stepBtn').classList.add('hidden');
+  document.getElementById('addOneBtn').classList.remove('hidden');
+  document.getElementById('resetStepBtn').classList.remove('hidden');
+  document.getElementById('dotArea').innerHTML = '';
+  document.getElementById('dotLabel').textContent = 'Add people one by one...';
+  document.getElementById('groupSlider').value = 2;
+  document.getElementById('sliderVal').textContent = 2;
+  document.getElementById('exactProb').textContent = '0.3%';
+  drawCurveChart(2);
+}
+
+function addOnePerson() {
+  const birthday = Math.floor(Math.random()*365);
+  const matchIdx = stepPeople.findIndex(p => p.birthday === birthday);
+  const id = stepPeople.length;
+  let color = '#4b5563';
+  if (matchIdx >= 0) {
+    color = BIRTHDAY_COLORS[matchIdx % BIRTHDAY_COLORS.length];
+    // recolor the matched person too
+    stepPeople[matchIdx].color = color;
+  }
+  stepPeople.push({ birthday, color, id });
+
+  // Re-render all dots
+  const dotArea = document.getElementById('dotArea');
+  dotArea.innerHTML = '';
+  stepPeople.forEach((p, i) => {
+    const dot = document.createElement('span');
+    dot.className = 'dot' + (i === stepPeople.length-1 ? ' dot-appear' : '');
+    dot.style.backgroundColor = p.color;
+    dot.title = `Person ${i+1}: day ${p.birthday+1}`;
+    dot.setAttribute('aria-label', `Person ${i+1}: birthday day ${p.birthday+1}`);
+    dotArea.appendChild(dot);
+  });
+
+  const n = stepPeople.length;
+  document.getElementById('groupSlider').value = Math.min(80, n);
+  document.getElementById('sliderVal').textContent = n;
+  const p = exactProb(n);
+  document.getElementById('exactProb').textContent = (p*100).toFixed(1) + '%';
+  drawCurveChart(Math.min(80, n));
+
+  const lbl = document.getElementById('dotLabel');
+  if (matchIdx >= 0) {
+    lbl.textContent = `Match! Person ${id+1} shares birthday (day ${birthday+1}) with person ${matchIdx+1}!`;
+    lbl.className = 'text-xs text-green-400 mt-1';
+  } else {
+    lbl.textContent = `Person ${id+1} added. Birthday: day ${birthday+1}. No match yet.`;
+    lbl.className = 'text-xs text-gray-400 mt-1';
+  }
+}
+
+function resetStepThrough() {
+  stepMode = false;
+  stepPeople = [];
+  document.getElementById('stepBtn').classList.remove('hidden');
+  document.getElementById('addOneBtn').classList.add('hidden');
+  document.getElementById('resetStepBtn').classList.add('hidden');
+  updateFromSlider();
+}
+
+// --- Monte Carlo ---
+function runMonteCarlo() {
+  const n = parseInt(document.getElementById('groupSlider').value);
+  let matches = 0;
+  const RUNS = 10000;
+  for (let r = 0; r < RUNS; r++) {
+    const seen = new Set();
+    let found = false;
+    for (let i = 0; i < n; i++) {
+      const b = Math.floor(Math.random()*365);
+      if (seen.has(b)) { found = true; break; }
+      seen.add(b);
+    }
+    if (found) matches++;
+  }
+  const mcP = matches / RUNS;
+  document.getElementById('mcProb').textContent = (mcP*100).toFixed(1) + '%';
+  document.getElementById('monteCarloDiv').classList.remove('hidden');
+  drawCurveChart(n, mcP);
+}
+
+// --- Curve chart ---
+let mcData = null;
+let lastMCn = null;
+let lastMCp = null;
+
+function drawCurveChart(highlightN, mcProbVal) {
+  if (mcProbVal !== undefined) { lastMCn = highlightN; lastMCp = mcProbVal; }
+  const canvas = document.getElementById('curveChart');
+  const W = canvas.offsetWidth || 280;
+  canvas.width = W;
+  const H = 180;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+
+  const pad = { t:10, r:10, b:25, l:35 };
+  const cW = W - pad.l - pad.r;
+  const cH = H - pad.t - pad.b;
+
+  // Grid lines
+  ctx.strokeStyle = '#374151';
+  ctx.lineWidth = 1;
+  [0,0.25,0.5,0.75,1].forEach(y => {
+    const py = pad.t + cH*(1-y);
+    ctx.beginPath(); ctx.moveTo(pad.l, py); ctx.lineTo(pad.l+cW, py); ctx.stroke();
+    ctx.fillStyle='#6b7280'; ctx.font='9px sans-serif'; ctx.textAlign='right';
+    ctx.fillText((y*100).toFixed(0)+'%', pad.l-3, py+3);
+  });
+
+  // X axis labels
+  [10,20,30,40,50,60,70,80].forEach(x => {
+    const px = pad.l + ((x-2)/78)*cW;
+    ctx.fillStyle='#6b7280'; ctx.font='9px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(x, px, H-8);
+  });
+
+  // Probability curve
+  ctx.beginPath();
+  ctx.strokeStyle = '#22c55e';
+  ctx.lineWidth = 2;
+  CURVE.forEach((pt, i) => {
+    const px = pad.l + ((pt.n-2)/78)*cW;
+    const py = pad.t + cH*(1-pt.p);
+    i===0 ? ctx.moveTo(px,py) : ctx.lineTo(px,py);
+  });
+  ctx.stroke();
+
+  // Monte Carlo dot
+  if (lastMCn && lastMCp !== null) {
+    const px = pad.l + ((lastMCn-2)/78)*cW;
+    const py = pad.t + cH*(1-lastMCp);
+    ctx.beginPath(); ctx.arc(px,py,5,0,Math.PI*2);
+    ctx.fillStyle='#3b82f6'; ctx.fill();
+  }
+
+  // Threshold markers
+  const thresholds = [{n:23,p:0.507,c:'#fbbf24',lbl:'50%@23'},{n:57,p:0.99,c:'#f87171',lbl:'99%@57'}];
+  thresholds.forEach(t => {
+    const px = pad.l + ((t.n-2)/78)*cW;
+    const py = pad.t + cH*(1-t.p);
+    ctx.beginPath(); ctx.setLineDash([3,3]); ctx.strokeStyle=t.c; ctx.lineWidth=1;
+    ctx.moveTo(px, pad.t); ctx.lineTo(px, pad.t+cH); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle=t.c; ctx.font='8px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(t.lbl, px, pad.t+cH+3);
+  });
+
+  // Highlight current n
+  const pxN = pad.l + ((highlightN-2)/78)*cW;
+  const pVal = exactProb(highlightN);
+  const pyN = pad.t + cH*(1-pVal);
+  ctx.beginPath(); ctx.arc(pxN, pyN, 6, 0, Math.PI*2);
+  ctx.fillStyle='#facc15'; ctx.fill();
+  ctx.strokeStyle='#fff'; ctx.lineWidth=1.5; ctx.stroke();
+}
+
+// Init
+updateFromSlider();
+</script>
+</body>
+</html>
